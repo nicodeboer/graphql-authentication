@@ -98,85 +98,31 @@ class RestrictionService extends Component
      */
     public function registerGqlQueries(RegisterGqlQueriesEvent $event)
     {
-        $event->queries['entries'] = [
-            'type' => Type::listOf(EntryInterface::getType()),
-            'args' => EntryArguments::getArguments(),
-            'resolve' => EntryResolver::class . '::resolve',
-            'description' => 'This query is used to query for entries.',
-            'complexity' => GqlHelper::relatedArgumentComplexity(),
+        if (!GraphqlAuthentication::$tokenService->getHeaderToken()) {
+            return;
+        }
+
+        $resolvers = [
+            'entries' => EntryResolver::class . '::resolve',
+            'entry' => EntryResolver::class . '::resolveOne',
+            'entryCount' => EntryResolver::class . '::resolveCount',
+            'assets' => AssetResolver::class . '::resolve',
+            'asset' => AssetResolver::class . '::resolveOne',
+            'assetCount' => AssetResolver::class . '::resolveCount',
+            'globalSets' => GlobalSetResolver::class . '::resolve',
+            'globalSet' => GlobalSetResolver::class . '::resolveOne',
         ];
 
-        $event->queries['entry'] = [
-            'type' => EntryInterface::getType(),
-            'args' => EntryArguments::getArguments(),
-            'resolve' => EntryResolver::class . '::resolveOne',
-            'description' => 'This query is used to query for a single entry.',
-            'complexity' => GqlHelper::relatedArgumentComplexity(),
-        ];
+        foreach (Craft::$app->getEntries()->getAllSections() as $section) {
+            // "Entries" was added in Craft 5.6.5
+            $resolvers[$section->handle] = EntryResolver::class . '::resolve';
+            $resolvers["{$section->handle}Entries"] = EntryResolver::class . '::resolve';
+        }
 
-        $event->queries['entryCount'] = [
-            'type' => Type::nonNull(Type::int()),
-            'args' => EntryArguments::getArguments(),
-            'resolve' => EntryResolver::class . '::resolveCount',
-            'description' => 'This query is used to return the number of entries.',
-            'complexity' => GqlHelper::relatedArgumentComplexity(),
-        ];
-
-        $event->queries['assets'] = [
-            'type' => Type::listOf(AssetInterface::getType()),
-            'args' => AssetArguments::getArguments(),
-            'resolve' => AssetResolver::class . '::resolve',
-            'description' => 'This query is used to query for assets.',
-            'complexity' => GqlHelper::relatedArgumentComplexity(),
-        ];
-
-        $event->queries['asset'] = [
-            'type' => AssetInterface::getType(),
-            'args' => AssetArguments::getArguments(),
-            'resolve' => AssetResolver::class . '::resolveOne',
-            'description' => 'This query is used to query for a single asset.',
-            'complexity' => GqlHelper::relatedArgumentComplexity(),
-        ];
-
-        $event->queries['assetCount'] = [
-            'type' => Type::nonNull(Type::int()),
-            'args' => AssetArguments::getArguments(),
-            'resolve' => AssetResolver::class . '::resolveCount',
-            'description' => 'This query is used to return the number of assets.',
-            'complexity' => GqlHelper::relatedArgumentComplexity(),
-        ];
-
-        $event->queries['globalSets'] = [
-            'type' => Type::listOf(GlobalSetInterface::getType()),
-            'args' => GlobalSetArguments::getArguments(),
-            'resolve' => GlobalSetResolver::class . '::resolve',
-            'description' => 'This query is used to query for global sets.',
-            'complexity' => GqlHelper::relatedArgumentComplexity(),
-        ];
-
-        $event->queries['globalSet'] = [
-            'type' => GlobalSetInterface::getType(),
-            'args' => GlobalSetArguments::getArguments(),
-            'resolve' => GlobalSetResolver::class . '::resolveOne',
-            'description' => 'This query is used to query for a single global set.',
-            'complexity' => GqlHelper::relatedArgumentComplexity(),
-        ];
-
-        $sections = (new Entries())->getAllSections();
-        $scope = $this->getSchema()->scope;
-
-        foreach ($sections as $section) {
-            if (!in_array("sections.{$section->uid}:read", $scope)) {
-                continue;
+        foreach ($resolvers as $name => $resolver) {
+            if (isset($event->queries[$name])) {
+                $event->queries[$name]['resolver'] = $resolver;
             }
-
-            $event->queries["{$section->handle}Entries"] = [
-                'type' => Type::listOf(EntryInterface::getType()),
-                'args' => EntryArguments::getArguments(),
-                'resolve' => EntryResolver::class . '::resolve',
-                'description' => 'This query is used to query for entries.',
-                'complexity' => GqlHelper::relatedArgumentComplexity(),
-            ];
         }
     }
 
@@ -201,11 +147,7 @@ class RestrictionService extends Component
      */
     public function shouldRestrictFields(): bool
     {
-        if (Craft::$app->getRequest()->isConsoleRequest || Craft::$app->getRequest()->isCpRequest) {
-            return false;
-        }
-
-        return true;
+        return Craft::$app->requestedRoute === 'graphql/api';
     }
 
     /**
@@ -397,7 +339,8 @@ class RestrictionService extends Component
         $authorOnlySections = $user ? $this->getAuthorOnlySections($user, 'mutation') : [];
 
         $entriesService = Craft::$app->getEntries();
-        $entrySection = $entriesService->getSectionById($entry->sectionId)->handle;
+        $sectionIdToTest = $entry->sectionId ? $entry->sectionId : $entry->getRootOwner()->sectionId;
+        $entrySection = $entriesService->getSectionById($sectionIdToTest)->handle;
 
         if (!in_array($entrySection, $authorOnlySections)) {
             return true;
